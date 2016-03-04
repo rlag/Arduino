@@ -1,0 +1,307 @@
+/*
+This is the final WORKING code for the servo-multiWell plate controller
+Also available on https://codebender.cc/sketch:247533
+For use with the Adafruit Motor Shield v2
+---->	http://www.adafruit.com/products/1438
+*/
+
+
+#include <Wire.h>
+#include <Adafruit_MotorShield.h>
+#include "utility/Adafruit_PWMServoDriver.h"
+#include <Servo.h>
+
+// Create the motor shield object with the default I2C address
+Adafruit_MotorShield AFMS = Adafruit_MotorShield();
+
+// Connect a stepper motor with 200 steps per revolution (1.8 degree)
+Adafruit_StepperMotor *xMotor = AFMS.getStepper(200, 1);
+Adafruit_StepperMotor *yMotor = AFMS.getStepper(200, 2);
+
+Servo servo;
+
+const int stepSize = 45;  // 20 tooth gear --> 0.2 mm/step, 9 mm well-to-well spacing on 96-well plate
+//const int upZpos = 1000;
+//const int downZpos = 2000;
+
+const int xMinLimitPin = 4;
+const int xMaxLimitPin = 5;
+const int yMinLimitPin = 6;
+const int yMaxLimitPin = 7;
+
+//const int DirA = 12;
+//const int PWMA = 3;
+//const int BrakeA = 9;
+const int zPosPin = 3;
+
+int i = 0;
+int val = 0;
+
+const boolean showStatus = false; // print status info to serial port
+
+boolean limitReached;
+int limitState = 0;
+int priorState = 0;
+int ypos = 0;
+int xpos = 0;
+int newypos = 0;
+int newxpos = 0;
+int dy = 0;
+int dx = 0;
+int A1x = 32; // x-steps from home to A1 well position
+int A1y = 31; // y-steps from home to A1 well position
+
+void setup()
+{
+	Serial.begin(9600);           // set up Serial library at 9600 bps
+
+	AFMS.begin();  // create with the default frequency 1.6KHz
+
+	xMotor->setSpeed(200);  // rpm
+	yMotor->setSpeed(200);  // rpm
+
+	servo.attach(zPosPin);
+
+	pinMode(xMinLimitPin, INPUT_PULLUP);
+	pinMode(xMaxLimitPin, INPUT_PULLUP);
+	pinMode(yMinLimitPin, INPUT_PULLUP);
+	pinMode(yMaxLimitPin, INPUT_PULLUP);
+
+//	pinMode(DirA, OUTPUT);
+//	pinMode(PWMA, OUTPUT);
+//	pinMode(BrakeA, OUTPUT);
+}
+
+void loop()
+{
+
+	while (Serial.available() > 0)
+	{
+
+		char row = Serial.read();  // read row character A...H
+		int col = Serial.parseInt(); // read column integer 1 - 12
+		char z = Serial.read(); // read z-position "+"=up, "-"=down
+		int rem = Serial.parseInt();
+
+		newypos = row - 'A' + 1;
+		newxpos = col;
+
+		//zServo.writeMicroseconds(upZpos);
+		servo.write(70); // move to up position
+		delay(100);
+
+		if (newypos == -16)    // '0' to home and move to well A1
+		{
+
+			// home the stage
+			homeStage();
+
+			// Adjust to well A1 position
+			limitReached = MoveStepsAndCheckLimits(A1x, A1y);
+			if (limitReached && showStatus)
+			{
+				Serial.println("Warning!! Limit Reached");
+			}
+
+			ypos = 1;
+			xpos = 1;
+			z = '+';   // home with z-position up
+
+		}
+		else
+		{
+
+			// handle y-position
+			if (newypos < 1) newypos = ypos;
+			if (newypos > 8) newypos = ypos;
+			dy = newypos - ypos;
+
+			// handle x-position
+			if (newxpos < 1) newxpos = xpos;
+			if (newxpos > 12) newxpos = xpos;
+			dx = newxpos - xpos;
+
+			// move steppers
+			limitReached = MoveStepsAndCheckLimits(dx * stepSize, dy * stepSize);
+
+			if (limitReached && showStatus)
+			{
+				Serial.println("Warning!! Limit Reached");
+			}
+
+			// Update positions
+			ypos = newypos;
+			xpos = newxpos;
+		}
+
+		// Release power to motors
+		xMotor->release();
+		yMotor->release();
+
+		// Handle z-position
+		delay(300);
+		if (z == '+')
+		{
+			//zServo.writeMicroseconds(upZpos);
+			servo.write(70);
+			Serial.print(z);
+		}
+		else if (z == '-')
+		{
+			//zServo.writeMicroseconds(downZpos);
+			servo.write(0);
+			Serial.print(z);
+		}
+
+		delay(300);
+		// Send serial command to confirm new position and motor completion
+		Serial.print(row);
+		Serial.print(col);
+		Serial.println(z);
+		Serial.println("OK");
+		
+
+	}
+
+	if (showStatus)
+	{
+		priorState = limitState;
+		limitState = readLimitSwitches();
+		if (limitState != priorState) Serial.println(limitState);
+		delay(50);
+	}
+
+}
+
+void homeStage()
+{
+	// home y-axis
+	boolean yHome = false;
+	while (!yHome)
+	{
+		yHome = MoveStepsAndCheckLimits(0, -1);
+	}
+	if (showStatus) Serial.println("Home on y-axis");
+
+	delay(100);
+
+	// home x-axis
+	boolean xHome = false;
+	while (!xHome)
+	{
+		xHome = MoveStepsAndCheckLimits(-1, 0);
+	}
+	if (showStatus) Serial.println("Home on x-axis");
+}
+
+int readLimitSwitches()
+{
+	int limitState  = !digitalRead(xMinLimitPin) * 8;
+	limitState += !digitalRead(xMaxLimitPin) * 4;
+	limitState += !digitalRead(yMinLimitPin) * 2;
+	limitState += !digitalRead(yMaxLimitPin) * 1;
+
+	return limitState;
+}
+
+boolean MoveStepsAndCheckLimits(int stepx, int stepy)
+{
+
+	//boolean limitReached = false;
+	boolean xfwd = (stepx < 0);
+	boolean yfwd = (stepy > 0);
+
+	int limitState = readLimitSwitches();
+	boolean limitReached = (limitState > 0);
+
+	stepx = abs(stepx);
+	stepy = abs(stepy);
+
+	while (((stepx > 0) || (stepy > 0)) && !limitReached)
+	{
+
+		if (stepx > 0)
+		{
+			if (xfwd)
+			{
+				xMotor->onestep(FORWARD, DOUBLE);
+			}
+			else
+			{
+				xMotor->onestep(BACKWARD, DOUBLE);
+			}
+			stepx--;
+		}
+
+		if (stepy > 0)
+		{
+			if (yfwd)
+			{
+				yMotor->onestep(FORWARD, DOUBLE);
+			}
+			else
+			{
+				yMotor->onestep(BACKWARD, DOUBLE);
+			}
+			stepy--;
+		}
+
+		limitState = readLimitSwitches();
+		limitReached = (limitState > 0);
+	}
+
+	// delay(10);
+	// Handle Limits: back off
+	while ((limitState & B1000) > 0)
+	{
+		xMotor->onestep(FORWARD, DOUBLE);
+		limitState = readLimitSwitches();
+	}
+	while ((limitState & B0100) > 0)
+	{
+		xMotor->onestep(BACKWARD, DOUBLE);
+		limitState = readLimitSwitches();
+	}
+	while ((limitState & B0010) > 0)
+	{
+		yMotor->onestep(FORWARD, DOUBLE);
+		limitState = readLimitSwitches();
+	}
+	while ((limitState & B0001) > 0)
+	{
+		yMotor->onestep(BACKWARD, DOUBLE);
+		limitState = readLimitSwitches();
+	}
+
+	/*
+	if ((limitState & B1000) > 0) xMotor->onestep(FORWARD, DOUBLE);
+	if ((limitState & B0100) > 0) xMotor->onestep(BACKWARD, DOUBLE);
+	if ((limitState & B0010) > 0) yMotor->onestep(FORWARD, DOUBLE);
+	if ((limitState & B0001) > 0) yMotor->onestep(BACKWARD, DOUBLE);
+	*/
+
+	return limitReached;
+}
+/*
+
+void setZpos(int zPosition){ 	
+
+	int moveComplete = false;
+	
+	while (moveComplete == false) {
+		
+		val = analogRead(zPosPin);   // get current position
+		int delta = zPosition - val;
+		Serial.print(val); Serial.print("  "); Serial.println(delta);
+		
+		if (abs(delta) < 20) {
+			analogWrite(PWMA,0);	// stop motor
+			moveComplete = true;
+		} else {
+			if (delta > 0) digitalWrite(DirA, LOW); 
+			else digitalWrite(DirA, HIGH);
+			analogWrite(PWMA, max(100,min(170,abs(delta))));
+    	}
+	}
+}
+*/
