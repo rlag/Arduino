@@ -14,6 +14,7 @@ Valves can be controlled specifically with the serial commands:
    can also interlace:
    e.g. 50,i100,100,i0 means turn on to 100/255 power at frame 50, then off at frame 100
 
+Also available on https://codebender.cc/sketch:246356
 **/
 
 /***************************************************
