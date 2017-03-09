@@ -9,7 +9,7 @@ For use with the Adafruit Motor Shield v2
 
 #include <Wire.h>
 #include <Adafruit_MotorShield.h>
-#include "utility/Adafruit_PWMServoDriver.h"
+#include "Adafruit_PWMServoDriver.h"
 #include <Servo.h>
 
 #define INPUT_SIZE 128 // max input serial string size
