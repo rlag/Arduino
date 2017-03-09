@@ -135,7 +135,7 @@ void moveToWell (String command)
 		newzdown = (z == '-');
 
 		// move to up position
-		servo.write(60); // 60=up
+		servo.write(80); // *was 60=up but made 80 to get to bottom of 2mL well, allows 40mm tube length into 43mm deep well
 		if (zdown) 
 		{
 			delay(servoDelay);
